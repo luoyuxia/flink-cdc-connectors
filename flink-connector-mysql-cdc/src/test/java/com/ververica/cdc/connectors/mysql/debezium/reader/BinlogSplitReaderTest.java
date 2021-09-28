@@ -29,6 +29,8 @@ import org.apache.flink.table.types.utils.TypeConversions;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.Collector;
 
+import org.apache.flink.shaded.guava18.com.google.common.util.concurrent.ThreadFactoryBuilder;
+
 import com.github.shyiko.mysql.binlog.BinaryLogClient;
 import com.ververica.cdc.connectors.mysql.MySqlTestBase;
 import com.ververica.cdc.connectors.mysql.debezium.EmbeddedFlinkDatabaseHistory;
@@ -50,6 +52,7 @@ import io.debezium.relational.TableId;
 import io.debezium.relational.history.TableChanges.TableChange;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
+import org.junit.BeforeClass;
 import org.junit.Test;
 
 import java.sql.SQLException;
@@ -62,6 +65,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.stream.Collectors;
 
 import static com.ververica.cdc.connectors.mysql.source.MySqlSourceOptions.SCAN_STARTUP_MODE;
@@ -79,8 +85,17 @@ public class BinlogSplitReaderTest extends MySqlTestBase {
     private final UniqueDatabase customerDatabase =
             new UniqueDatabase(MYSQL_CONTAINER, "customer", "mysqluser", "mysqlpw");
 
+    private static ExecutorService executor;
+
     private BinaryLogClient binaryLogClient;
     private MySqlConnection mySqlConnection;
+
+    @BeforeClass
+    public static void init() {
+        ThreadFactory threadFactory =
+                new ThreadFactoryBuilder().setNameFormat("binlog-split-reader-test").build();
+        executor = Executors.newSingleThreadExecutor(threadFactory);
+    }
 
     @Test
     public void testReadSingleBinlogSplit() throws Exception {
@@ -339,7 +354,7 @@ public class BinlogSplitReaderTest extends MySqlTestBase {
 
         // step-2: test read binlog split
         BinlogSplitReader binlogReader =
-                new BinlogSplitReader(statefulTaskContext, 0, binlogSplit.asBinlogSplit());
+                new BinlogSplitReader(statefulTaskContext, binlogSplit.asBinlogSplit(), executor);
         binlogReader.start();
 
         // step-3: make some binlog events
@@ -385,7 +400,8 @@ public class BinlogSplitReaderTest extends MySqlTestBase {
         for (int i = 0; i < scanSplitsNum; i++) {
             MySqlSplit sqlSplit = sqlSplits.get(i);
             SnapshotSplitReader snapshotSplitReader =
-                    new SnapshotSplitReader(statefulTaskContext, 0, sqlSplit.asSnapshotSplit());
+                    new SnapshotSplitReader(
+                            statefulTaskContext, sqlSplit.asSnapshotSplit(), executor);
             snapshotSplitReader.start();
             Iterator<SourceRecord> res;
             while ((res = snapshotSplitReader.pollSplitRecords()) != null) {
@@ -415,7 +431,7 @@ public class BinlogSplitReaderTest extends MySqlTestBase {
 
         // step-3: test read binlog split
         BinlogSplitReader binlogReader =
-                new BinlogSplitReader(statefulTaskContext, 0, binlogSplit.asBinlogSplit());
+                new BinlogSplitReader(statefulTaskContext, binlogSplit.asBinlogSplit(), executor);
         binlogReader.start();
 
         // step-4: make some binlog events

@@ -29,6 +29,8 @@ import org.apache.flink.table.types.utils.TypeConversions;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.Collector;
 
+import org.apache.flink.shaded.guava18.com.google.common.util.concurrent.ThreadFactoryBuilder;
+
 import com.github.shyiko.mysql.binlog.BinaryLogClient;
 import com.ververica.cdc.connectors.mysql.MySqlTestBase;
 import com.ververica.cdc.connectors.mysql.debezium.EmbeddedFlinkDatabaseHistory;
@@ -53,6 +55,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.stream.Collectors;
 
 import static org.junit.Assert.assertEquals;
@@ -66,6 +71,7 @@ public class SnapshotSplitReaderTest extends MySqlTestBase {
 
     private static BinaryLogClient binaryLogClient;
     private static MySqlConnection mySqlConnection;
+    private static ExecutorService executor;
 
     @BeforeClass
     public static void init() {
@@ -73,6 +79,9 @@ public class SnapshotSplitReaderTest extends MySqlTestBase {
         Configuration configuration = getConfig(new String[] {"customers"});
         binaryLogClient = StatefulTaskContext.getBinaryClient(configuration);
         mySqlConnection = StatefulTaskContext.getConnection(configuration);
+        ThreadFactory threadFactory =
+                new ThreadFactoryBuilder().setNameFormat("binlog-split-reader-test").build();
+        executor = Executors.newSingleThreadExecutor(threadFactory);
     }
 
     @Test
@@ -213,7 +222,8 @@ public class SnapshotSplitReaderTest extends MySqlTestBase {
         for (int i = 0; i < scanSplitsNum; i++) {
             MySqlSplit sqlSplit = mySqlSplits.get(i);
             snapshotSplitReader =
-                    new SnapshotSplitReader(statefulTaskContext, 0, sqlSplit.asSnapshotSplit());
+                    new SnapshotSplitReader(
+                            statefulTaskContext, sqlSplit.asSnapshotSplit(), executor);
             snapshotSplitReader.start();
             Iterator<SourceRecord> res;
             while ((res = snapshotSplitReader.pollSplitRecords()) != null) {

@@ -24,6 +24,8 @@ import org.apache.flink.connector.base.source.reader.splitreader.SplitReader;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsAddition;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsChange;
 
+import org.apache.flink.shaded.guava18.com.google.common.util.concurrent.ThreadFactoryBuilder;
+
 import com.github.shyiko.mysql.binlog.BinaryLogClient;
 import com.ververica.cdc.connectors.mysql.debezium.reader.BinlogSplitReader;
 import com.ververica.cdc.connectors.mysql.debezium.reader.DebeziumReader;
@@ -43,6 +45,9 @@ import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Iterator;
 import java.util.Queue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 
 import static com.ververica.cdc.connectors.mysql.debezium.task.context.StatefulTaskContext.getBinaryClient;
 import static com.ververica.cdc.connectors.mysql.debezium.task.context.StatefulTaskContext.getConnection;
@@ -52,20 +57,22 @@ public class MySqlSplitReader implements SplitReader<SourceRecord, MySqlSplit> {
 
     private static final Logger LOG = LoggerFactory.getLogger(MySqlSplitReader.class);
     private final Queue<MySqlSplit> splits;
-    private final int subtaskId;
     private final MySqlConnection jdbcConnection;
     private final BinaryLogClient binaryLogClient;
     private final StatefulTaskContext statefulTaskContext;
+    private final ExecutorService executor;
 
     @Nullable private DebeziumReader<SourceRecord, MySqlSplit> currentReader;
     @Nullable private String currentSplitId;
 
     public MySqlSplitReader(Configuration config, int subtaskId) {
-        this.subtaskId = subtaskId;
         this.splits = new ArrayDeque<>();
         this.jdbcConnection = getConnection(config);
         this.binaryLogClient = getBinaryClient(config);
         this.statefulTaskContext = new StatefulTaskContext(config, binaryLogClient, jdbcConnection);
+        ThreadFactory threadFactory =
+                new ThreadFactoryBuilder().setNameFormat("debezium-reader-" + subtaskId).build();
+        this.executor = Executors.newSingleThreadExecutor(threadFactory);
     }
 
     @Override
@@ -132,13 +139,13 @@ public class MySqlSplitReader implements SplitReader<SourceRecord, MySqlSplit> {
             if (nextSplit.isSnapshotSplit()) {
                 currentReader =
                         new SnapshotSplitReader(
-                                statefulTaskContext, subtaskId, nextSplit.asSnapshotSplit());
+                                statefulTaskContext, nextSplit.asSnapshotSplit(), executor);
             } else {
                 // start to read binlog split
                 LOG.info("It's turn to read binlog split, create binlog reader");
                 currentReader =
                         new BinlogSplitReader(
-                                statefulTaskContext, subtaskId, nextSplit.asBinlogSplit());
+                                statefulTaskContext, nextSplit.asBinlogSplit(), executor);
             }
             currentReader.start();
         }
